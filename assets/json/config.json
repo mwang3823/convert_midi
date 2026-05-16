@@ -1,0 +1,18 @@
+{
+  "environment": "DEV",
+  "bluetooth_mode": "both",
+  "DEV": {
+    "appName": "MIDI Streamer DEV",
+    "server": "",
+    "langDefault": "vi",
+    "enableLang": false,
+    "releaseDate": "01/01/2026"
+  },
+  "PRODUCT": {
+    "appName": "MIDI Streamer",
+    "server": "",
+    "langDefault": "vi",
+    "enableLang": false,
+    "releaseDate": "01/01/2026"
+  }
+}
