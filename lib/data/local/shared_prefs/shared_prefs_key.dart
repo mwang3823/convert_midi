@@ -8,5 +8,6 @@ class SharedPrefsKey {
   static const device_id      = 'device_id';
   static const user_model     = 'user_model';
   static const version_name   = 'version_name';
-  static const push_token_key = 'push_token';
+  static const push_token_key    = 'push_token';
+  static const saved_bt_device   = 'saved_bluetooth_device';
 }

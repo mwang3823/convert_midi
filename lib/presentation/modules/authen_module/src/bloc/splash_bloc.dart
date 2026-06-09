@@ -1,6 +1,6 @@
 import '../../../../base/base_view.dart';
 import '../../../../widgets/custom_navigator.dart';
-import '../../../bluetooth_module/src/ui/bluetooth_scanner_screen.dart';
+import '../../../shell_module/src/ui/shell_screen.dart';
 import '../ui/splash_screen.dart';
 
 class SplashBloc extends BaseBloc<SplashScreen> {
@@ -9,10 +9,10 @@ class SplashBloc extends BaseBloc<SplashScreen> {
 
   @override
   void onReady() {
-    Future.delayed(const Duration(seconds: 2), () {
+    Future.delayed(const Duration(seconds: 3), () {
       if (mounted) {
         CustomNavigator.pushReplacement<dynamic, dynamic>(
-            context, BluetoothScannerScreen());
+            context, ShellScreen());
       }
     });
   }

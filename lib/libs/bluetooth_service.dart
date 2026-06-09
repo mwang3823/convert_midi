@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -18,29 +19,41 @@ class BluetoothService {
   BluetoothCharacteristic? _writeCharacteristic;
   bool _classicConnected = false;
   String? _connectedDeviceName;
+  StreamSubscription? _disconnectSub;
 
-  final _scanController = StreamController<List<ScannedDevice>>.broadcast();
+  final _scanController  = StreamController<List<ScannedDevice>>.broadcast();
+  final _nameController  = StreamController<String?>.broadcast();
   final List<ScannedDevice> _devices = [];
   StreamSubscription? _bleScanSub;
 
   bool _classicStreamInitialized = false;
   bool _classicScanActive = false;
 
-  Stream<List<ScannedDevice>> get scanResults => _scanController.stream;
+  final Queue<List<int>> _sendQueue = Queue();
+  bool _isSending = false;
+  DateTime? _lastWriteTime;
+  static const int _minBleGapMs = 20;
+
+  Stream<List<ScannedDevice>> get scanResults        => _scanController.stream;
+  Stream<String?>             get connectedNameStream => _nameController.stream;
   String? get connectedDeviceName => _connectedDeviceName;
   BluetoothDevice? get connectedDevice => _connectedBleDevice;
 
   Future<bool> _requestPermissions() async {
     if (Platform.isAndroid) {
-      final perms = <Permission>[
+      final statuses = await [
         Permission.bluetoothScan,
         Permission.bluetoothConnect,
-      ];
-      if (await Permission.location.status.isDenied) {
-        perms.add(Permission.location);
+        Permission.location,
+      ].request();
+      final denied = statuses.entries
+          .where((e) => !e.value.isGranted && !e.value.isLimited)
+          .map((e) => e.key.toString())
+          .toList();
+      if (denied.isNotEmpty) {
+        LogService.instance.log('Quyền bị từ chối: ${denied.join(', ')}');
       }
-      final statuses = await perms.request();
-      return statuses.values.every((s) => s.isGranted || s.isLimited);
+      return denied.isEmpty;
     } else if (Platform.isIOS) {
       return await Permission.bluetooth.request().isGranted;
     }
@@ -230,7 +243,20 @@ class BluetoothService {
     }
 
     _connectedDeviceName = name;
+    _nameController.add(name);
     LogService.instance.log('BLE: kết nối thành công với $name');
+
+    await _disconnectSub?.cancel();
+    _disconnectSub = device.connectionState.listen((state) {
+      if (state == BluetoothConnectionState.disconnected) {
+        LogService.instance.log('BLE: $name đã ngắt kết nối');
+        _writeCharacteristic = null;
+        _connectedBleDevice = null;
+        _connectedDeviceName = null;
+        _nameController.add(null);
+      }
+    });
+
     return true;
   }
 
@@ -239,23 +265,39 @@ class BluetoothService {
     await _classic.connect(address, '00001101-0000-1000-8000-00805f9b34fb');
     _classicConnected = true;
     _connectedDeviceName = name;
+    _nameController.add(name);
     LogService.instance.log('Classic BT: kết nối thành công');
     return true;
   }
 
+  Future<void> allNotesOff() async {
+    cancelPendingWrites();
+    for (int ch = 0; ch < 16; ch++) {
+      sendRawData([0xB0 | ch, 0x7B, 0x00]);
+    }
+    LogService.instance.log('All Notes Off đã xếp hàng (16 channels)');
+  }
+
+  void cancelPendingWrites() => _sendQueue.clear();
+
   Future<void> disconnect() async {
+    await _disconnectSub?.cancel();
+    _disconnectSub = null;
     if (_connectedBleDevice != null) {
+      await allNotesOff();
       await _connectedBleDevice!.disconnect();
       _connectedBleDevice = null;
       _writeCharacteristic = null;
     }
     if (_classicConnected) {
+      await allNotesOff();
       try {
         await _classic.disconnect();
       } catch (_) {}
       _classicConnected = false;
     }
     _connectedDeviceName = null;
+    _nameController.add(null);
   }
 
   /// Đóng gói MIDI bytes theo chuẩn BLE-MIDI 1.0:
@@ -268,12 +310,32 @@ class BluetoothService {
   }
 
   Future<void> sendRawData(List<int> data) async {
+    _sendQueue.add(data);
+    _drainQueue();
+  }
+
+  void _drainQueue() async {
+    if (_isSending) return;
+    _isSending = true;
+    while (_sendQueue.isNotEmpty) {
+      await _writeSingle(_sendQueue.removeFirst());
+    }
+    _isSending = false;
+  }
+
+  Future<void> _writeSingle(List<int> data) async {
+    if (_lastWriteTime != null) {
+      final since = DateTime.now().difference(_lastWriteTime!).inMilliseconds;
+      if (since < _minBleGapMs) {
+        await Future.delayed(Duration(milliseconds: _minBleGapMs - since));
+      }
+    }
     if (_writeCharacteristic != null) {
       final packet = _wrapBleMidi(data);
-      final noResponse =
-          _writeCharacteristic!.properties.writeWithoutResponse;
+      final noResponse = _writeCharacteristic!.properties.writeWithoutResponse;
       try {
         await _writeCharacteristic!.write(packet, withoutResponse: noResponse);
+        _lastWriteTime = DateTime.now();
         LogService.instance.log(
             'BLE gửi: ${packet.map((b) => '0x${b.toRadixString(16).padLeft(2, '0').toUpperCase()}').join(' ')}');
       } catch (e) {
@@ -282,6 +344,7 @@ class BluetoothService {
     } else if (_classicConnected) {
       try {
         await _classic.writeBytes(Uint8List.fromList(data));
+        _lastWriteTime = DateTime.now();
         LogService.instance.log('Classic gửi: $data');
       } catch (e) {
         LogService.instance.log('Classic gửi lỗi: $e');
@@ -293,4 +356,7 @@ class BluetoothService {
 
   Stream<BluetoothConnectionState>? get connectionState =>
       _connectedBleDevice?.connectionState;
+
+  Stream<bool> get isBluetoothOn => FlutterBluePlus.adapterState
+      .map((s) => s == BluetoothAdapterState.on);
 }

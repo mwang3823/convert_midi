@@ -20,7 +20,10 @@ Future<void> main() async {
       Globals.applicationMode = 'PRODUCT';
     }
   }
+  
+  // Đổi thành MockBluetoothService() khi chạy trên emulator
   Globals.bluetoothService = BluetoothService();
+
   await LogService.instance.init();
 
   Globals.myApp = GlobalKey<MyAppState>();
@@ -47,21 +50,15 @@ class MyAppState extends State<MyApp> {
   Widget build(BuildContext context) {
     return OverlaySupport.global(
       child: AnnotatedRegion<SystemUiOverlayStyle>(
-        value: const SystemUiOverlayStyle(statusBarColor: Colors.transparent),
+        value: SystemUiOverlayStyle(
+          statusBarColor: Colors.transparent,
+          statusBarBrightness: Brightness.dark,
+          statusBarIconBrightness: Brightness.light,
+        ),
         child: MaterialApp(
           key: _key,
           debugShowCheckedModeBanner: false,
-          theme: ThemeData(
-            primaryColor: AppColors.primary,
-            fontFamily: AppFonts.montserrat,
-            useMaterial3: false,
-            pageTransitionsTheme: const PageTransitionsTheme(
-              builders: {
-                TargetPlatform.android: CupertinoPageTransitionsBuilder(),
-                TargetPlatform.iOS:     CupertinoPageTransitionsBuilder(),
-              },
-            ),
-          ),
+          theme: AppTheme.dark,
           builder: (context, child) => MediaQuery(
             data: MediaQuery.of(context)
                 .copyWith(textScaler: TextScaler.noScaling),

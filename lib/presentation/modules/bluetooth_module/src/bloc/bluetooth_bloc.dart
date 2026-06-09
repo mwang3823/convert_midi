@@ -1,28 +1,34 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart' hide BluetoothService;
 import 'package:rxdart/rxdart.dart';
 import '../../../../../common/constant.dart';
 import '../../../../../common/globals.dart';
+import '../../../../../data/local/shared_prefs/shared_prefs_key.dart';
 import '../../../../../models/scanned_device.dart';
 import '../../../../base/base_view.dart';
-import '../../../../widgets/custom_navigator.dart';
-import '../../../player_module/src/ui/player_screen.dart';
 import '../ui/bluetooth_scanner_screen.dart';
 
 class BluetoothBloc extends BaseBloc<BluetoothScannerScreen> {
-  final scanResults  = BehaviorSubject<List<ScannedDevice>>.seeded([]);
-  final isScanning   = BehaviorSubject<bool>.seeded(false);
-  final isConnecting = BehaviorSubject<bool>.seeded(false);
+  final scanResults     = BehaviorSubject<List<ScannedDevice>>.seeded([]);
+  final isScanning      = BehaviorSubject<bool>.seeded(false);
+  final isConnecting    = BehaviorSubject<bool>.seeded(false);
+  final savedDevice     = BehaviorSubject<ScannedDevice?>.seeded(null);
+  final connectedDevice = BehaviorSubject<ScannedDevice?>.seeded(null);
+  final bluetoothOn     = BehaviorSubject<bool>.seeded(true);
+  final permDenied      = BehaviorSubject<bool>.seeded(false);
 
   StreamSubscription? _scanStateSub;
   StreamSubscription? _scanResultsSub;
+  StreamSubscription? _btStateSub;
 
   @override
   void onInit() {
-    _scanStateSub = FlutterBluePlus.isScanning.listen((s) => isScanning.set(s));
-    _scanResultsSub = Globals.bluetoothService.scanResults
-        .listen((d) => scanResults.set(d));
+    _scanStateSub  = FlutterBluePlus.isScanning.listen((s) => isScanning.set(s));
+    _scanResultsSub = Globals.bluetoothService.scanResults.listen((d) => scanResults.set(d));
+    _btStateSub    = Globals.bluetoothService.isBluetoothOn.listen((on) => bluetoothOn.set(on));
+    _loadSavedDevice();
   }
 
   @override
@@ -35,19 +41,44 @@ class BluetoothBloc extends BaseBloc<BluetoothScannerScreen> {
   void onDispose() {
     _scanStateSub?.cancel();
     _scanResultsSub?.cancel();
+    _btStateSub?.cancel();
     Globals.bluetoothService.stopScan();
     scanResults.close();
     isScanning.close();
     isConnecting.close();
+    savedDevice.close();
+    connectedDevice.close();
+    bluetoothOn.close();
+    permDenied.close();
+  }
+
+  void _loadSavedDevice() {
+    final raw = Globals.prefs.getString(SharedPrefsKey.saved_bt_device);
+    if (raw.isEmpty) return;
+    try {
+      savedDevice.set(ScannedDevice.fromJson(jsonDecode(raw) as Map<String, dynamic>));
+    } catch (_) {}
+  }
+
+  void _saveDevice(ScannedDevice device) {
+    Globals.prefs.setString(SharedPrefsKey.saved_bt_device, jsonEncode(device.toJson()));
+    savedDevice.set(device);
+  }
+
+  void forgetDevice() {
+    Globals.prefs.remove(SharedPrefsKey.saved_bt_device);
+    savedDevice.set(null);
   }
 
   void startScan() {
+    permDenied.set(false);
     Globals.bluetoothService.startScan().catchError((dynamic e) {
+      final msg = e.toString().replaceFirst('Exception: ', '');
+      if (msg.contains('quyền') || msg.contains('permission')) {
+        permDenied.set(true);
+      }
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-              content: Text(e.toString().replaceFirst('Exception: ', ''))),
-        );
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
       }
     });
   }
@@ -62,15 +93,25 @@ class BluetoothBloc extends BaseBloc<BluetoothScannerScreen> {
     if (!mounted) return;
 
     if (success) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Kết nối thành công!')),
-      );
-      CustomNavigator.push(context, PlayerScreen());
+      _saveDevice(device);
+      connectedDevice.set(device);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Đã kết nối: ${device.name}')),
+        );
+      }
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Kết nối thất bại.')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Kết nối thất bại.')),
+        );
+      }
     }
+  }
+
+  void connectSaved() {
+    final device = savedDevice.value;
+    if (device != null) connect(device);
   }
 
   void showManualConnectDialog() {
@@ -106,9 +147,7 @@ class BluetoothBloc extends BaseBloc<BluetoothScannerScreen> {
                   if (v == null || v.trim().isEmpty) return 'Nhập địa chỉ';
                   if (mode != BluetoothMode.ble) {
                     final mac = RegExp(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$');
-                    if (!mac.hasMatch(v.trim())) {
-                      return 'Sai định dạng MAC (AA:BB:CC:DD:EE:FF)';
-                    }
+                    if (!mac.hasMatch(v.trim())) return 'Sai định dạng MAC (AA:BB:CC:DD:EE:FF)';
                   }
                   return null;
                 },
@@ -117,23 +156,17 @@ class BluetoothBloc extends BaseBloc<BluetoothScannerScreen> {
           ),
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Huỷ'),
-          ),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Huỷ')),
           ElevatedButton(
             onPressed: () {
               if (!formKey.currentState!.validate()) return;
               Navigator.pop(ctx);
-              final device = ScannedDevice(
+              connect(ScannedDevice(
                 name: nameCtrl.text.trim(),
                 id: addressCtrl.text.trim(),
-                type: mode == BluetoothMode.ble
-                    ? DeviceType.ble
-                    : DeviceType.classic,
+                type: mode == BluetoothMode.ble ? DeviceType.ble : DeviceType.classic,
                 raw: null,
-              );
-              connect(device);
+              ));
             },
             child: const Text('Kết nối'),
           ),
