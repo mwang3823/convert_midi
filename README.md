@@ -192,5 +192,3 @@ Các thư viện chính được sử dụng trong dự án `convert_midi`:
 
 Dự án này được phân phối dưới dạng mã nguồn đóng phục vụ cho mục đích phát triển nội bộ. Tất cả các quyền được bảo lưu.
 
----
-*Dự án được xây dựng và đóng gói hoàn thiện bởi **Antigravity AI Assistant** cùng với sự phát triển của **Google DeepMind Team**.*
